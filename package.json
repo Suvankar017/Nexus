@@ -1,0 +1,14 @@
+{
+  "name": "com.stellarpulse.nexus",
+  "version": "1.0.0",
+  "displayName": "Nexus",
+  "description": "This is a game framework",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.unity.inputsystem": "1.14.2"
+  },
+  "author": {
+    "name": "Stellar Pulse",
+    "url": "https://www.github.com/Suvankar017/Nexus.git"
+  }
+}
