@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -24,120 +24,266 @@ namespace Nexus.Core.Extensions
     /// </summary>
     public static class UnityObjectExtensions
     {
-        // =========================================================================
-        // 1. CORE NULL & LIFECYCLE CHECKS
-        // =========================================================================
+        #region Constants
+
+        /// <summary>
+        /// Default delay, in seconds, used by destruction helpers that do not require a
+        /// deferred timer. Kept as a named constant to make call sites self-documenting
+        /// (<c>DestroySafe()</c> vs a magic <c>0f</c> literal).
+        /// </summary>
+        private const float ImmediateDestroyDelay = 0f;
+
+        #endregion
+
+        #region #region Null Safety & Validation
 
         /// <summary>
         /// Returns <c>true</c> if the reference is a pure C# null OR has been destroyed by Unity.
         /// </summary>
-        public static bool IsNullOrDestroyed(this Object unityObject)
-        {
-            return unityObject == null;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsUnityNull(this Object obj)
+            => obj == null;
 
         /// <summary>
         /// Returns <c>true</c> if the reference is valid, non-null, and not destroyed.
         /// </summary>
-        public static bool IsAlive(this Object unityObject)
-        {
-            return unityObject != null;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsAlive(this Object obj)
+            => !obj.IsUnityNull();
 
         /// <summary>
-        /// Polymorphic check that safely checks if an arbitrary object or interface
-        /// is either a C# null OR a destroyed <see cref="Object"/>.
-        /// <para>
-        /// Critical for interface references like <c>IDamageable</c> or <c>IInteractable</c>
-        /// implemented by <see cref="MonoBehaviour"/> classes.
-        /// </para>
+        /// Returns <c>true</c> if <paramref name="obj"/> has been destroyed or was never assigned.
         /// </summary>
-        public static bool IsNullOrDestroyed(this object obj)
-        {
-            if (obj is null) return true;
-            if (obj is Object unityObj) return unityObj == null;
-            return false;
-        }
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsDestroyed(this Object obj)
+            => obj.IsUnityNull();
 
         /// <summary>
-        /// Polymorphic check that returns <c>true</c> only if the object/interface is not null 
-        /// and (if it is a Unity object) has not been destroyed.
+        /// Returns <c>true</c> if <paramref name="obj"/> has been destroyed or was never assigned.
         /// </summary>
-        public static bool IsAlive(this object obj)
-        {
-            return !obj.IsNullOrDestroyed();
-        }
-
-
-        // =========================================================================
-        // 2. SAFE OPERATORS (Fixes `?.` and `??`)
-        // =========================================================================
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsNullOrDestroyed(this Object obj)
+            => obj.IsUnityNull();
 
         /// <summary>
-        /// Converts a fake "Unity null" (destroyed object) into a true C# <c>null</c>.
+        /// Returns a true C# <c>null</c> if <paramref name="obj"/> is Unity-null, otherwise returns
+        /// <paramref name="obj"/> unchanged.
+        /// <br/>
         /// <para>
-        /// <b>Fixes the broken C# <c>?.</c> operator:</b><br/>
-        /// Standard: <c>myComponent?.DoSomething()</c> &#x2192; <i>Throws MissingReferenceException if destroyed!</i><br/>
-        /// Fixed: <c>myComponent.AsAlive()?.DoSomething()</c> &#x2192; <i>Safely evaluates to null.</i>
+        /// This is the standard fix for Unity's null-coalescing trap: because Unity overloads
+        /// <c>==</c> but not the underlying reference, expressions like <c>target?.DoThing()</c> or
+        /// <c>target ?? fallback</c> use the C# compiler's reference-null check internally for
+        /// <c>?.</c> and <c>??</c>, which does <b>not</b> go through Unity's overload. A destroyed
+        /// component can therefore silently pass through <c>?.</c> and touch destroyed native memory.
         /// </para>
         /// <para>
-        /// <b>Fixes the broken C# <c>??</c> operator:</b><br/>
-        /// <c>var target = currentTarget.AsAlive() ?? fallbackTarget;</c>
+        /// Calling <c>target.OrNull()?.DoThing()</c> forces the check through Unity's overloaded
+        /// equality first, guaranteeing <c>?.</c> short-circuits correctly on destroyed objects.
         /// </para>
         /// </summary>
-        public static T AsAlive<T>(this T unityObject) where T : Object
-        {
-            return unityObject == null ? null : unityObject;
-        }
-
-
-        // =========================================================================
-        // 3. SAFE DESTRUCTION & CLEANUP
-        // =========================================================================
+        /// <typeparam name="T">Concrete <see cref="UnityEngine.Object"/> type.</typeparam>
+        /// <param name="obj">Object to test.</param>
+        /// <returns><paramref name="obj"/> if alive; otherwise a genuine C# <c>null</c>.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static T OrNull<T>(this T obj) where T : Object
+            => obj.IsUnityNull() ? null : obj;
 
         /// <summary>
-        /// Destroys the object safely across both Play Mode (<see cref="Object.Destroy(Object)"/>) 
-        /// and Edit Mode (<see cref="Object.DestroyImmediate(Object)"/>).
+        /// Returns <paramref name="obj"/> if it is alive, otherwise returns <paramref name="fallback"/>.
+        /// <br/>
+        /// Ideal for resolving optional references (audio source, VFX prefab, UI icon) to a safe
+        /// default without scattering conditional null checks across gameplay code.
         /// </summary>
-        public static void SafeDestroy(this Object unityObject)
+        /// <typeparam name="T">Concrete <see cref="UnityEngine.Object"/> type.</typeparam>
+        /// <param name="obj">Candidate object.</param>
+        /// <param name="fallback">Object returned when <paramref name="obj"/> is Unity-null.</param>
+        /// <returns><paramref name="obj"/> or <paramref name="fallback"/>.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static T ValidOr<T>(this T obj, T fallback) where T : Object
+            => obj.IsUnityNull() ? fallback : obj;
+
+        #endregion
+
+        #region Destruction
+
+        /// <summary>
+        /// Destroys <paramref name="obj"/> using the correct API for the current execution context.
+        /// <br/>
+        /// <para>
+        /// Uses <see cref="Object.Destroy(Object)"/> in Play mode and
+        /// <see cref="Object.DestroyImmediate(Object, bool)"/> in Edit mode, since calling
+        /// <c>Destroy</c> outside Play mode silently does nothing and calling
+        /// <c>DestroyImmediate</c> during Play mode can corrupt object lifecycle expectations.
+        /// </para>
+        /// <para>
+        /// This single call is safe to use inside both runtime gameplay code and editor tooling
+        /// (custom inspectors, editor windows) without branching on <see cref="Application.isPlaying"/>
+        /// at every call site.
+        /// </para>
+        /// </summary>
+        /// <param name="obj">Object to destroy. No-op if already Unity-null.</param>
+        /// <param name="allowDestroyingAssets">
+        /// Passed through to <see cref="Object.DestroyImmediate(Object, bool)"/> in Edit mode.
+        /// Defaults to <c>false</c> to prevent accidentally deleting project assets (materials,
+        /// ScriptableObjects) when this is called from editor tooling on the wrong reference.
+        /// </param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void DestroySafe(this Object obj, bool allowDestroyingAssets = false)
         {
-            if (unityObject == null) return;
+            if (obj.IsUnityNull()) return;
 
 #if UNITY_EDITOR
             if (!Application.isPlaying)
             {
-                Object.DestroyImmediate(unityObject);
+                Object.DestroyImmediate(obj, allowDestroyingAssets);
                 return;
             }
 #endif
-            Object.Destroy(unityObject);
+
+            Object.Destroy(obj);
         }
 
         /// <summary>
-        /// Safely destroys the underlying <see cref="GameObject"/> of a Component.
+        /// Destroys <paramref name="obj"/> after <paramref name="delay"/> seconds via
+        /// <see cref="Object.Destroy(Object, float)"/>.
+        /// <br/>
+        /// Only valid in Play mode; delayed destruction has no meaningful equivalent in Edit mode.
+        /// Ideal for timed VFX cleanup, projectile lifetimes and death-animation-then-despawn flows
+        /// without manually scheduling a coroutine.
         /// </summary>
-        public static void SafeDestroyGameObject(this Component component)
+        /// <param name="obj">Object to destroy. No-op if already Unity-null.</param>
+        /// <param name="delay">Seconds to wait before destruction. Defaults to immediate.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void DestroySafe(this Object obj, float delay = ImmediateDestroyDelay)
         {
-            if (component == null) return;
-            component.gameObject.SafeDestroy();
+            if (obj.IsUnityNull()) return;
+            Object.Destroy(obj, delay);
         }
 
+        #endregion
 
-        // =========================================================================
-        // 4. SAFE LOGGING / DIAGNOSTICS
-        // =========================================================================
+        #region Instantiation
+
+        /// <summary>
+        /// Instantiates a copy of <paramref name="prefab"/>, guarding against a null prefab reference.
+        /// <br/>
+        /// A missing prefab assignment in the inspector is one of the most common causes of
+        /// <see cref="System.NullReferenceException"/> in spawners and object pools. This logs a
+        /// clear <see cref="Debug.LogError(object)"/> and returns <c>null</c> instead of throwing,
+        /// preventing a single bad reference from halting an entire spawn/update loop.
+        /// </summary>
+        /// <typeparam name="T">Concrete <see cref="UnityEngine.Object"/> type being instantiated.</typeparam>
+        /// <param name="prefab">Prefab or asset reference to clone.</param>
+        /// <returns>The instantiated copy, or <c>null</c> if <paramref name="prefab"/> was Unity-null.</returns>
+        public static T InstantiateSafe<T>(this T prefab) where T : Object
+        {
+            if (prefab.IsUnityNull())
+            {
+                Debug.LogError("InstantiateSafe failed: prefab reference is null or destroyed.");
+                return null;
+            }
+
+            return Object.Instantiate(prefab);
+        }
+
+        /// <summary>
+        /// Instantiates a copy of <paramref name="prefab"/> under <paramref name="parent"/>,
+        /// guarding against a null prefab reference.
+        /// <br/>
+        /// Ideal for UI element pooling and hierarchy-organized VFX/projectile spawning where the
+        /// parent transform groups instances for scene readability and batch cleanup.
+        /// </summary>
+        /// <typeparam name="T">Concrete <see cref="UnityEngine.Object"/> type being instantiated.</typeparam>
+        /// <param name="prefab">Prefab or asset reference to clone.</param>
+        /// <param name="parent">Transform to parent the new instance under.</param>
+        /// <returns>The instantiated copy, or <c>null</c> if <paramref name="prefab"/> was Unity-null.</returns>
+        public static T InstantiateSafe<T>(this T prefab, Transform parent) where T : Object
+        {
+            if (prefab.IsUnityNull())
+            {
+                Debug.LogError("InstantiateSafe failed: prefab reference is null or destroyed.");
+                return null;
+            }
+
+            return Object.Instantiate(prefab, parent);
+        }
+
+        /// <summary>
+        /// Instantiates a copy of <paramref name="prefab"/> at <paramref name="position"/> and
+        /// <paramref name="rotation"/>, guarding against a null prefab reference.
+        /// <br/>
+        /// Standard entry point for gameplay spawning (projectiles, hit-effects, enemies) where
+        /// the spawn transform is computed at runtime rather than authored on the prefab itself.
+        /// </summary>
+        /// <typeparam name="T">Concrete <see cref="UnityEngine.Object"/> type being instantiated.</typeparam>
+        /// <param name="prefab">Prefab or asset reference to clone.</param>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="rotation">World-space spawn rotation.</param>
+        /// <returns>The instantiated copy, or <c>null</c> if <paramref name="prefab"/> was Unity-null.</returns>
+        public static T InstantiateSafe<T>(this T prefab, Vector3 position, Quaternion rotation) where T : Object
+        {
+            if (prefab.IsUnityNull())
+            {
+                Debug.LogError("InstantiateSafe failed: prefab reference is null or destroyed.");
+                return null;
+            }
+
+            return Object.Instantiate(prefab, position, rotation);
+        }
+
+        /// <summary>
+        /// Instantiates a copy of <paramref name="prefab"/> at <paramref name="position"/> and
+        /// <paramref name="rotation"/> under <paramref name="parent"/>, guarding against a null
+        /// prefab reference.
+        /// <br/>
+        /// Combines transform placement and hierarchy organization in a single call for pooled
+        /// projectile/VFX systems that spawn directly into a designated container.
+        /// </summary>
+        /// <typeparam name="T">Concrete <see cref="UnityEngine.Object"/> type being instantiated.</typeparam>
+        /// <param name="prefab">Prefab or asset reference to clone.</param>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="rotation">World-space spawn rotation.</param>
+        /// <param name="parent">Transform to parent the new instance under.</param>
+        /// <returns>The instantiated copy, or <c>null</c> if <paramref name="prefab"/> was Unity-null.</returns>
+        public static T InstantiateSafe<T>(this T prefab, Vector3 position, Quaternion rotation, Transform parent) where T : Object
+        {
+            if (prefab.IsUnityNull())
+            {
+                Debug.LogError("InstantiateSafe failed: prefab reference is null or destroyed.");
+                return null;
+            }
+
+            return Object.Instantiate(prefab, position, rotation, parent);
+        }
+
+        #endregion
+
+        #region Debug & Identification
+
+        /// <summary>
+        /// Returns <see cref="Object.GetInstanceID"/> for <paramref name="obj"/>, or <c>0</c> if
+        /// <paramref name="obj"/> is Unity-null.
+        /// <br/>
+        /// Safe to use as a dictionary key source or pooling identifier without first checking
+        /// for null, since instance ID <c>0</c> is never assigned to a real Unity object.
+        /// </summary>
+        /// <param name="obj">Object to query.</param>
+        /// <returns>The instance ID, or <c>0</c> if <paramref name="obj"/> is Unity-null.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int GetInstanceIdSafe(this Object obj)
+            => obj.IsUnityNull() ? 0 : obj.GetInstanceID();
 
         /// <summary>
         /// Returns the name of the Unity Object without throwing a <see cref="MissingReferenceException"/>
         /// if the object has already been destroyed.
         /// </summary>
-        public static string SafeName(this Object unityObject, string fallback = "<null or destroyed>")
+        public static string SafeName(this Object obj, string fallback = "<null or destroyed>")
         {
-            if (unityObject == null) return fallback;
+            if (obj.IsUnityNull()) return fallback;
 
             try
             {
-                return unityObject.name;
+                return obj.name;
             }
             catch (MissingReferenceException)
             {
@@ -145,35 +291,54 @@ namespace Nexus.Core.Extensions
             }
         }
 
-
-        // =========================================================================
-        // 5. LINQ & COLLECTION HELPERS
-        // =========================================================================
-
         /// <summary>
-        /// Filters an enumerable to exclude both C# nulls and destroyed Unity objects.
+        /// Returns a human-readable debug string describing <paramref name="obj"/>, safely handling
+        /// destroyed or null references instead of throwing.
+        /// <br/>
+        /// Format: <c>TypeName ("ObjectName", InstanceID: 12345)</c>. Intended for
+        /// <see cref="Debug.Log(object)"/> calls, exception messages and runtime inspectors —
+        /// not for hot-path logic due to string allocation.
         /// </summary>
-        public static IEnumerable<T> WhereAlive<T>(this IEnumerable<T> source) where T : Object
+        /// <param name="obj">Object to describe.</param>
+        /// <returns>A formatted debug string, or a placeholder if <paramref name="obj"/> is Unity-null.</returns>
+        public static string ToDebugString(this Object obj)
         {
-            if (source == null) yield break;
+            if (obj.IsUnityNull())
+                return "<null UnityEngine.Object>";
 
-            foreach (var item in source)
-            {
-                if (item != null)
-                {
-                    yield return item;
-                }
-            }
+            return $"{obj.GetType().Name} (\"{obj.name}\", InstanceID: {obj.GetInstanceID()})";
         }
 
+        #endregion
+
+        #region Scene Persistence
+
         /// <summary>
-        /// In-place removal of all destroyed Unity objects from a List.
-        /// Avoids GC allocations caused by LINQ <c>Where()</c> chains.
+        /// Marks <paramref name="obj"/> to survive scene loads via
+        /// <see cref="Object.DontDestroyOnLoad(Object)"/>, guarding against null references and
+        /// Edit-mode calls.
+        /// <br/>
+        /// <para>
+        /// Calling <see cref="Object.DontDestroyOnLoad(Object)"/> outside Play mode has no effect
+        /// and can mask configuration mistakes in editor scripts. This wrapper silently no-ops in
+        /// that case rather than letting a misplaced call appear to succeed.
+        /// </para>
+        /// <para>
+        /// Standard use case: singleton managers (audio, save system, input) that must persist
+        /// across scene transitions in a multi-scene game.
+        /// </para>
         /// </summary>
-        public static int RemoveDestroyed<T>(this List<T> list) where T : Object
+        /// <param name="obj">Object to persist. Must be a root-level <see cref="GameObject"/> or
+        /// component thereof per Unity's requirements for <see cref="Object.DontDestroyOnLoad(Object)"/>.</param>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void MarkPersistentAcrossScenes(this Object obj)
         {
-            if (list == null) return 0;
-            return list.RemoveAll(item => item == null);
+            if (obj.IsUnityNull()) return;
+            if (!Application.isPlaying) return;
+
+            Object.DontDestroyOnLoad(obj);
         }
+
+        #endregion
     }
 }
