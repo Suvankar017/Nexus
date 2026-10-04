@@ -1,7 +1,9 @@
 {
     "name": "Nexus.Runtime",
     "rootNamespace": "Nexus",
-    "references": [],
+    "references": [
+        "GUID:acbf817451536794baa4e99977dbeb24"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
