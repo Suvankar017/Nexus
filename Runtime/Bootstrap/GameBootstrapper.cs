@@ -163,8 +163,6 @@ namespace Nexus.Bootstrap
                     new JSONPersistenceSerializer()));
 
             registry.Register<ISettingsService>(new SettingsService());
-
-            Debug.Log(Application.persistentDataPath);
         }
     }
 }
